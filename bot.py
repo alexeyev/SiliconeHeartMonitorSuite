@@ -1,9 +1,32 @@
 import time
-from typing import Dict, Any
-
+import logging
 import psutil
+import subprocess
+import yaml
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackContext
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Logs to console
+        logging.FileHandler('bot.log', mode='a', encoding='utf-8')  # Logs to file
+    ]
+)
+
+
+def load_config():
+    with open("config.yaml", "r", encoding="utf-8") as stream:
+        try:
+            config = yaml.safe_load(stream)
+            logging.info("Config loaded successfully.")
+            return config
+        except yaml.YAMLError as exc:
+            logging.exception("Problem parsing the config file. Quitting.")
+            quit(code=-1)
 
 
 def get_cpu_usage():
@@ -11,79 +34,122 @@ def get_cpu_usage():
 
 
 def get_cpu_temperature():
-    # psutil.sensors_temperatures() returns a dictionary of temperature readings
-    # The key 'coretemp' is commonly used for CPU temperature on Linux systems
     temps = psutil.sensors_temperatures()
     if 'coretemp' in temps:
-        # Return the current temperature of the first core
         return temps['coretemp'][0].current
     else:
         return None
 
 
 def get_gpu_temperature():
-    # This function is a placeholder; actual implementation depends on your GPU and system
-    # For NVIDIA GPUs, you might use the 'nvidia-smi' command-line tool
-    # For AMD GPUs, you might use 'aticonfig' or other tools
-    # Ensure you have the necessary tools installed and accessible in your PATH
     try:
-        # Example for NVIDIA GPUs
-        import subprocess
-        result = subprocess.run(['nvidia-smi',
-                                 '--query-gpu=temperature.gpu',
-                                 '--format=csv,noheader,nounits'],
-                                stdout=subprocess.PIPE)
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+            stdout=subprocess.PIPE
+        )
         temp = result.stdout.decode('utf-8').strip()
         return int(temp)
-    except Exception as e:
+    except Exception:
+        return None
+
+
+def get_memory_usage():
+    memory = psutil.virtual_memory()
+    logging.debug("Memory:" + str(memory))
+    return memory.percent
+
+
+def get_gpu_memory_usage():
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+            stdout=subprocess.PIPE
+        )
+        output = result.stdout.decode('utf-8').strip().split(',')
+        used_memory = int(output[0].strip())
+        total_memory = int(output[1].strip())
+        gpu_memory_usage = (used_memory / total_memory) * 100
+        logging.debug("GpuMemory:" + str(output))
+        return gpu_memory_usage
+    except Exception:
         return None
 
 
 def send_alert(message, bot, chat_id):
     try:
         bot.send_message(chat_id=chat_id, text=message)
-    except TelegramError as e:
-        print(f"Error sending message: {e}")
+    except Exception as e:
+        logging.error(f"Error sending message: {e}")
 
 
-def monitor(bot, chat_id, bot_config):
+async def status(update: Update, context: CallbackContext):
+    cpu_usage = get_cpu_usage()
+    cpu_temp = get_cpu_temperature()
+    gpu_temp = get_gpu_temperature()
+    memory_usage = get_memory_usage()
+    gpu_memory_usage = get_gpu_memory_usage()
+
+    status_message = (
+            f"CPU Usage: {cpu_usage}%\n"
+            f"CPU Temperature: {cpu_temp}°C\n" +
+            (f"GPU Temperature: {gpu_temp}°C" if gpu_temp is not None else "GPU Temperature: Not available\n") +
+            f"RAM Usage: {memory_usage}%\n" +
+            (f"VRAM Usage: {gpu_memory_usage}%"
+             if gpu_memory_usage is not None else "GPU Memory Usage: Not available")
+    )
+
+    await update.message.reply_text(status_message)
+    logging.info(f"Status requested by {update.message.from_user.username} ({update.message.from_user.id})")
+
+
+async def monitor(bot, chat_id, thresholds):
+    logging.debug("Starting the monitoring loop...")
+
     while True:
+
+        logging.debug("Getting the numbers...")
+
         cpu_usage = get_cpu_usage()
         cpu_temp = get_cpu_temperature()
         gpu_temp = get_gpu_temperature()
+        memory_usage = get_memory_usage()
+        gpu_memory_usage = get_gpu_memory_usage()
+
+        logging.debug("Numbers obtained...")
 
         alert_message = ""
 
-        if cpu_usage > 80:
+        # Check thresholds and create alerts
+        if cpu_usage > thresholds['cpu_usage']:
             alert_message += f"High CPU usage detected: {cpu_usage}%\n"
-        if cpu_temp and cpu_temp > 75:
+        if cpu_temp and cpu_temp > thresholds['cpu_temperature']:
             alert_message += f"High CPU temperature detected: {cpu_temp}°C\n"
-        if gpu_temp and gpu_temp > 75:
+        if gpu_temp and gpu_temp > thresholds['gpu_temperature']:
             alert_message += f"High GPU temperature detected: {gpu_temp}°C\n"
+        if memory_usage > thresholds['memory_usage']:
+            alert_message += f"High memory usage detected: {memory_usage}%\n"
+        if gpu_memory_usage and gpu_memory_usage > thresholds['gpu_memory_usage']:
+            alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%\n"
 
         if alert_message:
             send_alert(alert_message, bot, chat_id)
 
+        logging.debug("Stuff checked...")
         time.sleep(60)  # Check every 60 seconds
 
 
+def main():
+    config = load_config()
+    application = Application.builder().token(config["bot"]["token"]).build()
+    application.add_handler(CommandHandler('status', status))
+    logging.info("Handlers added.")
+    application.run_polling()
+    bot = Bot(token=config["bot"]["token"])
+    chat_id = config["bot"]["chat-id"]
+    thresholds = config["bot"]["thresholds"]
+    logging.info("Monitoring starting...")
+    monitor(bot, chat_id, thresholds)
+
+
 if __name__ == '__main__':
-
-    import yaml
-    import logging
-
-    config: Dict[str, Any] = None
-
-    with open("config.yaml", "r", encoding="utf-8") as stream:
-        try:
-            config = yaml.safe_load(stream)["bot"]
-            logging.info("Config loaded successfully.")
-        except yaml.YAMLError as exc:
-            logging.exception("Problem parsing the config file. Quitting.")
-            quit(code=-1)
-
-    bot = Bot(token=config["token"])
-    logging.info("Bot was set up successfully.")
-    monitor(bot, config["chat-id"], config)
-
-    logging.info("Quitting.")
+    main()
