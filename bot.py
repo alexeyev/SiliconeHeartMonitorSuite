@@ -1,15 +1,15 @@
-import time
 import logging
-import psutil
 import subprocess
+from typing import Dict
+
+import psutil
 import yaml
 from telegram import Bot
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext
 
-# Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Logs to console
@@ -18,8 +18,8 @@ logging.basicConfig(
 )
 
 
-def load_config():
-    with open("config.yaml", "r", encoding="utf-8") as stream:
+def load_config(path: str = "config.yaml"):
+    with open(path, "r", encoding="utf-8") as stream:
         try:
             config = yaml.safe_load(stream)
             logging.info("Config loaded successfully.")
@@ -55,7 +55,6 @@ def get_gpu_temperature():
 
 def get_memory_usage():
     memory = psutil.virtual_memory()
-    logging.debug("Memory:" + str(memory))
     return memory.percent
 
 
@@ -69,26 +68,29 @@ def get_gpu_memory_usage():
         used_memory = int(output[0].strip())
         total_memory = int(output[1].strip())
         gpu_memory_usage = (used_memory / total_memory) * 100
-        logging.debug("GpuMemory:" + str(output))
         return gpu_memory_usage
     except Exception:
         return None
 
 
-def send_alert(message, bot, chat_id):
+async def send_alert(message: str, bot: Bot, chat_id):
     try:
-        bot.send_message(chat_id=chat_id, text=message)
+        await bot.send_message(chat_id=chat_id, text=message)
     except Exception as e:
         logging.error(f"Error sending message: {e}")
 
 
-async def status(update: Update, context: CallbackContext):
+def get_numbers():
     cpu_usage = get_cpu_usage()
     cpu_temp = get_cpu_temperature()
     gpu_temp = get_gpu_temperature()
     memory_usage = get_memory_usage()
     gpu_memory_usage = get_gpu_memory_usage()
+    return cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage
 
+
+async def status(update: Update, context: CallbackContext):
+    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
     status_message = (
             f"CPU Usage: {cpu_usage}%\n"
             f"CPU Temperature: {cpu_temp}°C\n" +
@@ -102,40 +104,28 @@ async def status(update: Update, context: CallbackContext):
     logging.info(f"Status requested by {update.message.from_user.username} ({update.message.from_user.id})")
 
 
-async def monitor(bot, chat_id, thresholds):
-    logging.debug("Starting the monitoring loop...")
+async def monitor(context: CallbackContext):
+    logging.debug("Getting the numbers...")
+    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
+    thresholds: Dict = context.job.data
+    logging.debug("Numbers obtained...")
 
-    while True:
+    alert_message = ""
 
-        logging.debug("Getting the numbers...")
+    # Check thresholds and create alerts
+    if cpu_usage > thresholds['cpu_usage']:
+        alert_message += f"High CPU usage detected: {cpu_usage}%\n"
+    if cpu_temp and cpu_temp > thresholds['cpu_temperature']:
+        alert_message += f"High CPU temperature detected: {cpu_temp}°C\n"
+    if gpu_temp and gpu_temp > thresholds['gpu_temperature']:
+        alert_message += f"High GPU temperature detected: {gpu_temp}°C\n"
+    if memory_usage > thresholds['memory_usage']:
+        alert_message += f"High memory usage detected: {memory_usage}%\n"
+    if gpu_memory_usage and gpu_memory_usage > thresholds['gpu_memory_usage']:
+        alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%\n"
 
-        cpu_usage = get_cpu_usage()
-        cpu_temp = get_cpu_temperature()
-        gpu_temp = get_gpu_temperature()
-        memory_usage = get_memory_usage()
-        gpu_memory_usage = get_gpu_memory_usage()
-
-        logging.debug("Numbers obtained...")
-
-        alert_message = ""
-
-        # Check thresholds and create alerts
-        if cpu_usage > thresholds['cpu_usage']:
-            alert_message += f"High CPU usage detected: {cpu_usage}%\n"
-        if cpu_temp and cpu_temp > thresholds['cpu_temperature']:
-            alert_message += f"High CPU temperature detected: {cpu_temp}°C\n"
-        if gpu_temp and gpu_temp > thresholds['gpu_temperature']:
-            alert_message += f"High GPU temperature detected: {gpu_temp}°C\n"
-        if memory_usage > thresholds['memory_usage']:
-            alert_message += f"High memory usage detected: {memory_usage}%\n"
-        if gpu_memory_usage and gpu_memory_usage > thresholds['gpu_memory_usage']:
-            alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%\n"
-
-        if alert_message:
-            send_alert(alert_message, bot, chat_id)
-
-        logging.debug("Stuff checked...")
-        time.sleep(60)  # Check every 60 seconds
+    if alert_message:
+        await send_alert(alert_message, context.bot, context.job.chat_id)
 
 
 def main():
@@ -143,12 +133,15 @@ def main():
     application = Application.builder().token(config["bot"]["token"]).build()
     application.add_handler(CommandHandler('status', status))
     logging.info("Handlers added.")
-    application.run_polling()
-    bot = Bot(token=config["bot"]["token"])
-    chat_id = config["bot"]["chat-id"]
+
     thresholds = config["bot"]["thresholds"]
-    logging.info("Monitoring starting...")
-    monitor(bot, chat_id, thresholds)
+    logging.info(f"Thresholds: {thresholds}")
+
+    job_minute = application.job_queue.run_repeating(monitor,
+                                                     interval=config["bot"]["polling-frequency"],
+                                                     chat_id=config["bot"]["chat-id"],
+                                                     data=thresholds)
+    application.run_polling()
 
 
 if __name__ == '__main__':

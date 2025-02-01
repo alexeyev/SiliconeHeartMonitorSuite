@@ -1,5 +1,11 @@
 bot:
   token: "100500:azazaza_zazaza"
   chat-id: 2128506
-  polling-frequency: 60
-  enable-querying: True
+  polling-frequency: 300
+
+  thresholds:
+    cpu_usage: 90          # CPU usage percentage threshold
+    cpu_temperature: 75    # CPU temperature threshold (°C)
+    gpu_temperature: 75    # GPU temperature threshold (°C)
+    memory_usage: 90       # Memory usage percentage threshold
+    gpu_memory_usage: 95   # GPU memory usage percentage threshold
