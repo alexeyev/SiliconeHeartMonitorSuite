@@ -1,0 +1,5 @@
+bot:
+  token: "100500:azazaza_zazaza"
+  chat-id: 2128506
+  polling-frequency: 60
+  enable-querying: True

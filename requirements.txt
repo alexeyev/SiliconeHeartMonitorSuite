@@ -1,0 +1,2 @@
+psutil
+python-telegram-bot>=21.10
