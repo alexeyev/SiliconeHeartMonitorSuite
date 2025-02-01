@@ -92,12 +92,12 @@ def get_numbers():
 async def status(update: Update, context: CallbackContext):
     cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
     status_message = (
-            f"CPU Usage: {cpu_usage}%\n"
-            f"CPU Temperature: {cpu_temp}°C\n" +
-            (f"GPU Temperature: {gpu_temp}°C" if gpu_temp is not None else "GPU Temperature: Not available\n") +
+            f"CPU Usage: {cpu_usage}%\n" +
+            (f"CPU Temperature: {cpu_temp}°C\n" if cpu_temp is not None else "CPU Temperature: Not available\n")+
+            (f"GPU Temperature: {gpu_temp}°C\n" if gpu_temp is not None else "GPU Temperature: Not available\n") +
             f"RAM Usage: {memory_usage}%\n" +
             (f"VRAM Usage: {gpu_memory_usage}%"
-             if gpu_memory_usage is not None else "GPU Memory Usage: Not available")
+             if gpu_memory_usage is not None else "VRAM Usage: Not available")
     )
 
     await update.message.reply_text(status_message)
@@ -106,7 +106,9 @@ async def status(update: Update, context: CallbackContext):
 
 async def monitor(context: CallbackContext):
     logging.debug("Getting the numbers...")
-    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
+    numbers = get_numbers()
+    logging.info(f"Current machine state numbers: {numbers}")
+    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = numbers
     thresholds: Dict = context.job.data
     logging.debug("Numbers obtained...")
 
@@ -125,6 +127,7 @@ async def monitor(context: CallbackContext):
         alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%\n"
 
     if alert_message:
+        logging.info("Alert! " + alert_message.replace("\n", " >> "))
         await send_alert(alert_message, context.bot, context.job.chat_id)
 
 
