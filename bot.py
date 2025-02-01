@@ -38,6 +38,7 @@ def get_cpu_temperature():
     if 'coretemp' in temps:
         return temps['coretemp'][0].current
     else:
+        logging.warning(f"No CPU temperatures found in {temps}")
         return None
 
 
@@ -47,9 +48,14 @@ def get_gpu_temperature():
             ['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
             stdout=subprocess.PIPE
         )
-        temp = result.stdout.decode('utf-8').strip()
-        return int(temp)
-    except Exception:
+        temperatures = (result.stdout.decode('utf-8')
+                        .strip()
+                        .replace("\n", " ")
+                        .replace("  ", " ")
+                        .split(" "))
+        return max([int(temp) for temp in temperatures])
+    except Exception as e:
+        logging.exception("Could not obtain GPU temperature")
         return None
 
 
@@ -93,7 +99,7 @@ async def status(update: Update, context: CallbackContext):
     cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
     status_message = (
             f"CPU Usage: {cpu_usage}%\n" +
-            (f"CPU Temperature: {cpu_temp}°C\n" if cpu_temp is not None else "CPU Temperature: Not available\n")+
+            (f"CPU Temperature: {cpu_temp}°C\n" if cpu_temp is not None else "CPU Temperature: Not available\n") +
             (f"GPU Temperature: {gpu_temp}°C\n" if gpu_temp is not None else "GPU Temperature: Not available\n") +
             f"RAM Usage: {memory_usage}%\n" +
             (f"VRAM Usage: {gpu_memory_usage}%"
