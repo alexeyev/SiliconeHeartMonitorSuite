@@ -66,6 +66,7 @@ def get_memory_usage():
 
 def get_gpu_memory_usage():
     try:
+        # todo: multigpu setup
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
             stdout=subprocess.PIPE
