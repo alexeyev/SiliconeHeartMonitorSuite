@@ -13,7 +13,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Logs to console
-        logging.FileHandler('bot.log', mode='a', encoding='utf-8')  # Logs to file
+        logging.FileHandler('bot.log', mode='a', encoding='utf-8')
     ]
 )
 
@@ -24,8 +24,11 @@ def load_config(path: str = "config.yaml"):
             config = yaml.safe_load(stream)
             logging.info("Config loaded successfully.")
             return config
-        except yaml.YAMLError as exc:
+        except yaml.YAMLError:
             logging.exception("Problem parsing the config file. Quitting.")
+            quit(code=-1)
+        except Exception:
+            logging.exception("Cannot read configs. Quitting.")
             quit(code=-1)
 
 
@@ -45,7 +48,10 @@ def get_cpu_temperature():
 def get_gpu_temperature():
     try:
         result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+            [
+                'nvidia-smi',
+                '--query-gpu=temperature.gpu',
+                '--format=csv,noheader,nounits'],
             stdout=subprocess.PIPE
         )
         temperatures = (result.stdout.decode('utf-8')
@@ -54,21 +60,25 @@ def get_gpu_temperature():
                         .replace("  ", " ")
                         .split(" "))
         return max([int(temp) for temp in temperatures])
-    except Exception as e:
+    except Exception:
         logging.exception("Could not obtain GPU temperature")
         return None
 
 
-def get_memory_usage():
+def get_memory_usage() -> float:
     memory = psutil.virtual_memory()
     return memory.percent
 
 
-def get_gpu_memory_usage():
+def get_gpu_memory_usage() -> float:
     try:
         # todo: multigpu setup
         result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+            [
+                'nvidia-smi',
+                '--query-gpu=memory.used,memory.total',
+                '--format=csv,noheader,nounits'
+            ],
             stdout=subprocess.PIPE
         )
         output = result.stdout.decode('utf-8').strip().split(',')
@@ -87,7 +97,7 @@ async def send_alert(message: str, bot: Bot, chat_id):
         logging.error(f"Error sending message: {e}")
 
 
-def get_numbers():
+def get_state():
     cpu_usage = get_cpu_usage()
     cpu_temp = get_cpu_temperature()
     gpu_temp = get_gpu_temperature()
@@ -97,23 +107,28 @@ def get_numbers():
 
 
 async def status(update: Update, context: CallbackContext):
-    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_numbers()
+    cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = get_state()
     status_message = (
             f"CPU Usage: {cpu_usage}%\n" +
-            (f"CPU Temperature: {cpu_temp}°C\n" if cpu_temp is not None else "CPU Temperature: Not available\n") +
-            (f"GPU Temperature: {gpu_temp}°C\n" if gpu_temp is not None else "GPU Temperature: Not available\n") +
+            (f"CPU Temperature: {cpu_temp}°C\n"
+             if cpu_temp is not None
+             else "CPU Temperature: Not available\n") +
+            (f"GPU Temperature: {gpu_temp}°C\n"
+             if gpu_temp is not None
+             else "GPU Temperature: Not available\n") +
             f"RAM Usage: {memory_usage}%\n" +
             (f"VRAM Usage: {gpu_memory_usage}%"
              if gpu_memory_usage is not None else "VRAM Usage: Not available")
     )
 
     await update.message.reply_text(status_message)
-    logging.info(f"Status requested by {update.message.from_user.username} ({update.message.from_user.id})")
+    logging.info(f"Status requested by {update.message.from_user.username} "
+                 f"({update.message.from_user.id})")
 
 
 async def monitor(context: CallbackContext):
     logging.debug("Getting the numbers...")
-    numbers = get_numbers()
+    numbers = get_state()
     logging.info(f"Current machine state numbers: {numbers}")
     cpu_usage, cpu_temp, gpu_temp, memory_usage, gpu_memory_usage = numbers
     thresholds: Dict = context.job.data
@@ -130,8 +145,8 @@ async def monitor(context: CallbackContext):
         alert_message += f"High GPU temperature detected: {gpu_temp}°C\n"
     if memory_usage > thresholds['memory_usage']:
         alert_message += f"High memory usage detected: {memory_usage}%\n"
-    if gpu_memory_usage and gpu_memory_usage > thresholds['gpu_memory_usage']:
-        alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%\n"
+    if gpu_memory_usage and gpu_memory_usage > thresholds["gpu_memory_usage"]:
+        alert_message += f"High GPU memory usage detected: {gpu_memory_usage}%"
 
     if alert_message:
         logging.info("Alert! " + alert_message.replace("\n", " >> "))
@@ -139,20 +154,20 @@ async def monitor(context: CallbackContext):
 
 
 def main():
-    config = load_config()
-    application = Application.builder().token(config["bot"]["token"]).build()
-    application.add_handler(CommandHandler('status', status))
+    config = load_config()["bot"]
+    application = Application.builder().token(config["token"]).build()
+    application.add_handler(CommandHandler("status", status))
     logging.info("Handlers added.")
 
-    thresholds = config["bot"]["thresholds"]
+    thresholds = config["thresholds"]
     logging.info(f"Thresholds: {thresholds}")
 
-    job_minute = application.job_queue.run_repeating(monitor,
-                                                     interval=config["bot"]["polling-frequency"],
-                                                     chat_id=config["bot"]["chat-id"],
-                                                     data=thresholds)
+    application.job_queue.run_repeating(monitor,
+                                        interval=config["polling-frequency"],
+                                        chat_id=config["chat-id"],
+                                        data=thresholds)
     application.run_polling()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
